@@ -3,14 +3,25 @@ package entities
 type Command uint8
 
 const (
-	START Command = iota
+	ADD Command = iota
+	START
 	STOP
 	PAUSE
 	RESET
+	STATUS
 )
 
+var Commands map[string]Command = map[string]Command{
+	"ADD":    ADD,
+	"START":  START,
+	"STOP":   STOP,
+	"PAUSE":  PAUSE,
+	"RESET":  RESET,
+	"STATUS": STATUS,
+}
+
 type Request struct {
-	Cmd  Command  `json:"cmd"`
+	Cmd  string   `json:"cmd"`
 	Args []string `json:"args,omitempty"`
 }
 
@@ -23,6 +34,6 @@ const (
 
 type Response struct {
 	Status  Status   `json:"status"`
-	Message *string  `json:"message,omitempty"`
+	Message string   `json:"message,omitempty"`
 	Data    []string `json:"data,omitempty"`
 }

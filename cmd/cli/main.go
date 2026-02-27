@@ -1,12 +1,10 @@
 package main
 
 import (
-	"html/template"
-	"net/http"
+	"context"
 	"sync"
 
-	"pomodoro.tracker/internal/controller"
-	"pomodoro.tracker/internal/usecase"
+	"pomodoro.tracker/internal/deamon"
 )
 
 var (
@@ -14,17 +12,12 @@ var (
 )
 
 func main() {
-	// Роут для статики (CSS, картинки)
-	http.Handle("/static/", http.StripPrefix(
-		"/static/",
-		http.FileServer(http.Dir("static")),
-	))
+	serv, err := deamon.New("/tmp/my_socket", 1024, 1)
+	if err != nil {
+		panic(err)
+	}
 
-	tmpl := template.Must(template.ParseFiles("templates/index.html"))
-
-	tasksUC, _ := usecase.NewTaskManager()
-
-	httpServ, _ := controller.NewHttpWithRoutes(mu, tasksUC, tmpl)
-
-	httpServ.Run()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serv.Run(ctx)
 }
