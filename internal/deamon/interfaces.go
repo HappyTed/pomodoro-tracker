@@ -3,19 +3,25 @@ package deamon
 import "context"
 
 type (
-	TaskManager interface {
+	Server interface {
+		Run(ctx context.Context) error
+		Stop() error
+	}
+
+	Deamon interface {
 		// Добавить задачу
 		Add(name string, count int) error
 		// Запустить таймер
-		Run() error
+		Run(ctx context.Context) error
 		// Приостановить
 		Pause() error
 		// Завершить помидорку
 		Stop() error
 		// Сбросить все этапы
 		Reset() error
-		// Текущий статус
-		Status() error
+		// Текущий статус по задаче
+		Status() (Task, error)
+		Shutdown() error // gracefull shutdown
 	}
 
 	Timer interface {

@@ -11,12 +11,7 @@ const (
 	TIMER_LENGTH = 5 * time.Second
 )
 
-type TestData struct {
-	Name  string
-	Timer Timer
-}
-
-func TestDefaultFinish(t *testing.T) {
+func TestTimerDefaultFinish(t *testing.T) {
 	sig := make(chan struct{})
 	timer, err := NewTimer(TIMER_LENGTH, sig)
 	if err != nil {
@@ -70,7 +65,7 @@ func TestDefaultFinish(t *testing.T) {
 	}
 }
 
-func TestWithPause(t *testing.T) {
+func TestTimerWithPause(t *testing.T) {
 	sig := make(chan struct{})
 	timer, err := NewTimer(TIMER_LENGTH, sig)
 	if err != nil {
@@ -127,7 +122,7 @@ func TestWithPause(t *testing.T) {
 	}
 }
 
-func TestReset(t *testing.T) {
+func TestTimerReset(t *testing.T) {
 	sig := make(chan struct{})
 	timer, err := NewTimer(TIMER_LENGTH, sig)
 	if err != nil {
