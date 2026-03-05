@@ -8,9 +8,8 @@ import (
 	"net"
 	"os"
 	"sync"
-	"time"
 
-	"pomodoro.tracker/internal/entities"
+	"pomodoro.tracker/internal/models/api"
 )
 
 // Unix Socker Server
@@ -21,74 +20,77 @@ type UnixSocketServer struct {
 	maxConnections int
 	connections    int
 	mu             sync.RWMutex
+	socketPath     string
 }
 
 func New(socketPath string, bufSize int64, maxConnections int) (Server, error) {
-	var s = &UnixSocketServer{maxBufSize: bufSize, maxConnections: maxConnections}
-
-	_, err := os.Stat(socketPath)
-	if err != nil {
-		// сокет существует
+	var s = &UnixSocketServer{
+		maxBufSize:     bufSize,
+		maxConnections: maxConnections,
+		socketPath:     socketPath,
 	}
-
-	if err == nil {
-		// если файл сокета уже существует, нужно его удалить для дальнейшей работы программы
-		fmt.Println("Deleting existing", socketPath)
-		err := os.Remove(socketPath)
-		if err != nil {
-			fmt.Println(err)
-			return nil, err
-		}
-	}
-
-	l, err := net.Listen("unix", socketPath)
-	if err != nil {
-		fmt.Println("listen error:", err)
-		return nil, err
-	}
-	s.listner = l
 
 	return s, nil
 }
 
-func (s *UnixSocketServer) Run(ctx context.Context) {
+func (s *UnixSocketServer) Run(ctx context.Context) error {
 	fmt.Println("Try run unix socket domain server")
-	fmt.Printf("Server run! Waiting for connection: %s\n", s.listner.Addr().String())
 
-	// логгирующая функция
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-			default:
-				fmt.Println("Current connections num:", s.connections, "/ MaxConn:", s.maxConnections, ". Server listen:", s.listner.Addr().String())
-				time.Sleep(1 * time.Second)
-			}
+	_, err := os.Stat(s.socketPath)
+	if err == nil {
+		// если файл сокета уже существует, нужно его удалить для дальнейшей работы программы
+		fmt.Println("Deleting existing", s.socketPath)
+		err := os.Remove(s.socketPath)
+		if err != nil {
+			fmt.Println(err)
+			return err
 		}
-	}()
+	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Println("Server stopped by context")
-			s.listner.Close()
-			return
-		default:
-			if s.connections < s.maxConnections {
-				nc, err := s.listner.Accept() // Это ожидающая операция
-				// и к этому момоенту мог сработать контекст, получается гонка
-				if err != nil {
-					fmt.Println("Accept error:", err)
-					continue
-				}
-				fmt.Println("New connection!")
-				s.mu.Lock()
-				s.connections++
-				s.mu.Unlock()
-				go s.handleCommand(ctx, nc)
-			}
+	l, err := net.Listen("unix", s.socketPath)
+	if err != nil {
+		fmt.Println("listen error:", err)
+		return err
+	}
+	s.listner = l
 
-		}
+	fmt.Printf(
+		"Server run! Waiting for connection: %s\n",
+		s.listner.Addr().String(),
+	)
+
+	handelConnections(ctx)
+
+	return nil
+
+	// for {
+	// 	select {
+	// 	case <-ctx.Done():
+	// 		fmt.Println("Server stopped by context")
+	// 		s.listner.Close()
+	// 		return nil
+	// 	default:
+	// 		if s.connections < s.maxConnections {
+	// 			nc, err := s.listner.Accept() // Это ожидающая операция
+	// 			// и к этому момоенту мог сработать контекст, получается гонка
+	// 			if err != nil {
+	// 				fmt.Println("Accept error:", err)
+	// 				continue
+	// 			}
+	// 			fmt.Println("New connection!")
+	// 			s.mu.Lock()
+	// 			s.connections++
+	// 			s.mu.Unlock()
+	// 			go s.handleCommand(ctx, nc)
+	// 		}
+
+	// 	}
+	// }
+}
+
+func (s *UnixSocketServer) Stop() {
+	if s.listner != nil {
+		s.listner.Close()
 	}
 }
 
@@ -119,38 +121,38 @@ func handlerFactory(ctx context.Context, c net.Conn, buffSize int64) {
 		data := buf[:n]
 		fmt.Print("Server got:", string(data))
 
-		req := &entities.Request{}
-		resp := &entities.Response{
-			Status: entities.OK,
+		req := &api.Request{}
+		resp := &api.Response{
+			Status: api.OK,
 		}
 		err = json.Unmarshal(data, req)
 		if err != nil {
 			fmt.Println("Marshal read data Error:", err)
-			resp = &entities.Response{
-				Status:  entities.ERROR,
+			resp = &api.Response{
+				Status:  api.ERROR,
 				Message: err.Error(),
 			}
 		}
 
 		// TODO: где-то здесь вызывать нужны обработчик
-		if cmd, ok := entities.Commands[req.Cmd]; ok {
+		if cmd, ok := api.Commands[req.Cmd]; ok {
 			switch cmd {
-			case entities.ADD:
+			case api.ADD:
 				AddTaskHandleFunc()
-			case entities.START:
+			case api.START:
 				StartHandleFunc()
-			case entities.STOP:
+			case api.STOP:
 				StopHandleFunc()
-			case entities.PAUSE:
+			case api.PAUSE:
 				PauseHandleFunc()
-			case entities.RESET:
+			case api.RESET:
 				ResetHandleFunc()
-			case entities.STATUS:
+			case api.STATUS:
 				StatusHandleFunc()
 			}
 		} else {
-			resp = &entities.Response{
-				Status:  entities.ERROR,
+			resp = &api.Response{
+				Status:  api.ERROR,
 				Message: fmt.Sprintf("Unknow Command: %s\n", req.Cmd),
 			}
 		}
@@ -167,21 +169,25 @@ func handlerFactory(ctx context.Context, c net.Conn, buffSize int64) {
 }
 
 // работает с подключением до обрыва соединения
-func (s *UnixSocketServer) handleCommand(ctx context.Context, c net.Conn) {
-	defer func() {
-		s.mu.Lock()
-		s.connections--
-		s.mu.Unlock()
-	}()
+func handelConnections(lst net.Listener, ch chan net.Listener) {
 
 	for {
+
+		conn, err := lst.Accept()
+		if err != nil {
+			// TODO
+		}
+		ch <- conn
+
 		select {
 		case <-ctx.Done():
 			fmt.Println("Server stopped by context")
 			return
-		default:
+		default: // не блокирующая операция
+			conn, err := s.listner.Accept()
+
 			buf := make([]byte, s.maxBufSize)
-			n, err := c.Read(buf)
+			n, err := conn.Read(buf)
 			if err != nil {
 				if err == io.EOF {
 					fmt.Println("Close Connection by client.")
@@ -194,38 +200,38 @@ func (s *UnixSocketServer) handleCommand(ctx context.Context, c net.Conn) {
 			data := buf[:n]
 			fmt.Print("Server got:", string(data))
 
-			req := &entities.Request{}
-			resp := &entities.Response{
-				Status: entities.OK,
+			req := &api.Request{}
+			resp := &api.Response{
+				Status: api.OK,
 			}
 			err = json.Unmarshal(data, req)
 			if err != nil {
 				fmt.Println("Marshal read data Error:", err)
-				resp = &entities.Response{
-					Status:  entities.ERROR,
+				resp = &api.Response{
+					Status:  api.ERROR,
 					Message: err.Error(),
 				}
 			}
 
 			// TODO: где-то здесь вызывать нужны обработчик
-			if cmd, ok := entities.Commands[req.Cmd]; ok {
+			if cmd, ok := api.Commands[req.Cmd]; ok {
 				switch cmd {
-				case entities.ADD:
+				case api.ADD:
 					AddTaskHandleFunc()
-				case entities.START:
+				case api.START:
 					StartHandleFunc()
-				case entities.STOP:
+				case api.STOP:
 					StopHandleFunc()
-				case entities.PAUSE:
+				case api.PAUSE:
 					PauseHandleFunc()
-				case entities.RESET:
+				case api.RESET:
 					ResetHandleFunc()
-				case entities.STATUS:
+				case api.STATUS:
 					StatusHandleFunc()
 				}
 			} else {
-				resp = &entities.Response{
-					Status:  entities.ERROR,
+				resp = &api.Response{
+					Status:  api.ERROR,
 					Message: fmt.Sprintf("Unknow Command: %s\n", req.Cmd),
 				}
 			}

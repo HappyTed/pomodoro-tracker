@@ -1,4 +1,4 @@
-package entities
+package api
 
 type Command uint8
 

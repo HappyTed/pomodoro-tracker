@@ -5,6 +5,7 @@ import "context"
 type (
 	Server interface {
 		Run(ctx context.Context) error
+		Status() (uint, error)
 		Stop() error
 	}
 
