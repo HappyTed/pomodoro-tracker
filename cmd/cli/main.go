@@ -12,12 +12,13 @@ var (
 )
 
 func main() {
-	serv, err := deamon.New("/tmp/my_socket", 1024, 1)
+	d, err := deamon.New("/tmp/my_socket", 1024, 1)
 	if err != nil {
 		panic(err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	serv.Run(ctx)
+	d.Run(ctx)
+	d.Wait()
 }

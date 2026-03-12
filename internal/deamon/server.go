@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	"pomodoro.tracker/internal/models/api"
 )
@@ -15,12 +16,15 @@ import (
 // Unix Socker Server
 type UnixSocketServer struct {
 	// logger
-	listner        net.Listener
+
+	// sync
+	mu sync.RWMutex
+	wg sync.WaitGroup
+
+	socketPath     string
 	maxBufSize     int64 // kb, по дефолту можно сделать 128
 	maxConnections int
-	connections    int
-	mu             sync.RWMutex
-	socketPath     string
+	connections    int // текущее количество подключений
 }
 
 func New(socketPath string, bufSize int64, maxConnections int) (Server, error) {
@@ -47,51 +51,36 @@ func (s *UnixSocketServer) Run(ctx context.Context) error {
 		}
 	}
 
-	l, err := net.Listen("unix", s.socketPath)
-	if err != nil {
-		fmt.Println("listen error:", err)
-		return err
-	}
-	s.listner = l
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		for ctx.Err() != context.Canceled {
+			time.Sleep(1)
 
-	fmt.Printf(
-		"Server run! Waiting for connection: %s\n",
-		s.listner.Addr().String(),
-	)
+			l, err := net.Listen("unix", s.socketPath)
+			if err != nil {
+				fmt.Println("listen error:", err)
+				continue
+			}
 
-	handelConnections(ctx)
+			fmt.Printf(
+				"Server run! Waiting for connection: %s\n", l.Addr().String(),
+			)
+
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.handelConnections(ctx, l)
+			}()
+		}
+	}()
 
 	return nil
-
-	// for {
-	// 	select {
-	// 	case <-ctx.Done():
-	// 		fmt.Println("Server stopped by context")
-	// 		s.listner.Close()
-	// 		return nil
-	// 	default:
-	// 		if s.connections < s.maxConnections {
-	// 			nc, err := s.listner.Accept() // Это ожидающая операция
-	// 			// и к этому момоенту мог сработать контекст, получается гонка
-	// 			if err != nil {
-	// 				fmt.Println("Accept error:", err)
-	// 				continue
-	// 			}
-	// 			fmt.Println("New connection!")
-	// 			s.mu.Lock()
-	// 			s.connections++
-	// 			s.mu.Unlock()
-	// 			go s.handleCommand(ctx, nc)
-	// 		}
-
-	// 	}
-	// }
 }
 
-func (s *UnixSocketServer) Stop() {
-	if s.listner != nil {
-		s.listner.Close()
-	}
+func (s *UnixSocketServer) Wait() error {
+	s.wg.Wait()
+	return nil
 }
 
 type HandlerFunc func(c net.Conn) error
@@ -169,82 +158,75 @@ func handlerFactory(ctx context.Context, c net.Conn, buffSize int64) {
 }
 
 // работает с подключением до обрыва соединения
-func handelConnections(lst net.Listener, ch chan net.Listener) {
-
-	for {
-
+func (s *UnixSocketServer) handelConnections(ctx context.Context, lst net.Listener) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
 		conn, err := lst.Accept()
 		if err != nil {
-			// TODO
-		}
-		ch <- conn
-
-		select {
-		case <-ctx.Done():
-			fmt.Println("Server stopped by context")
 			return
-		default: // не блокирующая операция
-			conn, err := s.listner.Accept()
-
-			buf := make([]byte, s.maxBufSize)
-			n, err := conn.Read(buf)
-			if err != nil {
-				if err == io.EOF {
-					fmt.Println("Close Connection by client.")
-					return
-				}
-				fmt.Println("Read Error:", err)
-				return
-			}
-
-			data := buf[:n]
-			fmt.Print("Server got:", string(data))
-
-			req := &api.Request{}
-			resp := &api.Response{
-				Status: api.OK,
-			}
-			err = json.Unmarshal(data, req)
-			if err != nil {
-				fmt.Println("Marshal read data Error:", err)
-				resp = &api.Response{
-					Status:  api.ERROR,
-					Message: err.Error(),
-				}
-			}
-
-			// TODO: где-то здесь вызывать нужны обработчик
-			if cmd, ok := api.Commands[req.Cmd]; ok {
-				switch cmd {
-				case api.ADD:
-					AddTaskHandleFunc()
-				case api.START:
-					StartHandleFunc()
-				case api.STOP:
-					StopHandleFunc()
-				case api.PAUSE:
-					PauseHandleFunc()
-				case api.RESET:
-					ResetHandleFunc()
-				case api.STATUS:
-					StatusHandleFunc()
-				}
-			} else {
-				resp = &api.Response{
-					Status:  api.ERROR,
-					Message: fmt.Sprintf("Unknow Command: %s\n", req.Cmd),
-				}
-			}
-
-			respData, err := json.Marshal(resp)
-			if err != nil {
-				_, err = c.Write([]byte(err.Error()))
-				fmt.Println("Failed to prepare json response: marshal error")
-				return
-			}
-
-			_, err = c.Write(respData)
 		}
+
+		buf := make([]byte, s.maxBufSize)
+		n, err := conn.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				fmt.Println("Close Connection by client.")
+				return
+			}
+			fmt.Println("Read Error:", err)
+			return
+		}
+
+		data := buf[:n]
+		fmt.Print("Server got:", string(data))
+
+		req := &api.Request{}
+		resp := &api.Response{
+			Status: api.OK,
+		}
+
+		err = json.Unmarshal(data, req)
+		if err != nil {
+			fmt.Println("Marshal read data Error:", err)
+			resp = &api.Response{
+				Status:  api.ERROR,
+				Message: err.Error(),
+			}
+		}
+
+		// TODO: где-то здесь вызывать нужный обработчик
+		if cmd, ok := api.Commands[req.Cmd]; ok {
+			switch cmd {
+			case api.ADD:
+				AddTaskHandleFunc()
+			case api.START:
+				StartHandleFunc()
+			case api.STOP:
+				StopHandleFunc()
+			case api.PAUSE:
+				PauseHandleFunc()
+			case api.RESET:
+				ResetHandleFunc()
+			case api.STATUS:
+				StatusHandleFunc()
+			}
+		} else {
+			resp = &api.Response{
+				Status:  api.ERROR,
+				Message: fmt.Sprintf("Unknow Command: %s\n", req.Cmd),
+			}
+		}
+
+		respData, err := json.Marshal(resp)
+		if err != nil {
+			_, err = conn.Write([]byte(err.Error()))
+			fmt.Println("Failed to prepare json response: marshal error")
+			return
+		}
+
+		_, err = conn.Write(respData)
 	}
 }
 
